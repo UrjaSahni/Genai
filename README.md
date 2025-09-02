@@ -18,5 +18,5 @@ An AI-powered academic assistant that allows researchers to upload multiple rese
 - Python 3.8 or later  
 - TOGETHER_API_KEY environment variable set for ChatTogether API  
 
-### Installation
+
 
