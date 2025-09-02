@@ -6,7 +6,7 @@ from langchain_community.document_loaders import PyPDFLoader, TextLoader, Unstru
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_together import ChatTogether
+from openai import OpenAI  # Using OpenAI SDK to connect to DeepSeek API
 
 # ---------------- SETUP ----------------
 
@@ -26,7 +26,6 @@ with st.sidebar:
 
 @st.cache_resource(show_spinner="Loading default PDFs...")
 def load_default_vectorstore():
-    # No default docs loaded for this domain-specific app; rely on user uploads
     from langchain.docstore.document import Document
     dummy_doc = Document(page_content="Upload research papers to start summarizing and comparing.", metadata={})
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
@@ -104,58 +103,54 @@ if new_docs:
     except Exception as e:
         st.error(f"Error updating vector store: {str(e)}")
 
-# ---------------- LLM + RETRIEVER ----------------
+# ---------------- DEEPSEEK LLM + SUMMARIZATION ----------------
 
-try:
-    retriever = vector_store.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": 4, "fetch_k": 10, "lambda_mult": 0.5}
+# Initialize DeepSeek OpenAI SDK client
+API_KEY = "sk-7f756817da3342a5b801badaf5bf2336"  # Use your secret securely instead of hardcoding
+client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
+
+
+def call_deepseek_chat(prompt):
+    messages = [
+        {"role": "system", "content": "You are an expert academic research assistant."},
+        {"role": "user", "content": prompt}
+    ]
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=messages,
+        stream=False
     )
-    together_api_key = os.getenv("TOGETHER_API_KEY")
-    if not together_api_key:
-        st.error("❌ TOGETHER_API_KEY not found. Set it in environment variables.")
-        st.stop()
-    llm = ChatTogether(
-        model="deepseek-ai/DeepSeek-V3",
-        temperature=0.2,
-        together_api_key=together_api_key
-    )
-except Exception as e:
-    st.error(f"❌ Failed to initialize LLM or retriever: {str(e)}")
-    st.stop()
+    return response.choices[0].message.content
 
-# ---------------- MULTI-LEVEL SUMMARIZATION ----------------
 
-def generate_multi_level_summary(paper_text, llm):
+def generate_multi_level_summary(paper_text):
     prompt = f"""
-    You are an expert academic research assistant. Summarize this research paper at three levels:
+Summarize this research paper at three levels:
 
-    1. Executive Summary (3-4 sentences)
-    2. Section-wise summary (Abstract, Introduction, Methods, Results, Conclusion)
-    3. Key Contributions (Highest impact points)
+1. Executive Summary (3-4 sentences)
+2. Section-wise summary (Abstract, Introduction, Methods, Results, Conclusion)
+3. Key Contributions (Highest impact points)
 
-    Paper Text:
-    {paper_text}
+Paper Text:
+{paper_text}
 
-    Provide your response as a numbered list.
-    """
-    response = llm.run(prompt)
-    return response
+Provide your response as a numbered list.
+"""
+    return call_deepseek_chat(prompt)
 
-# ---------------- CROSS-PAPER COMPARISON ----------------
 
-def compare_papers_summaries(summaries, llm):
+def compare_papers_summaries(summaries):
     prompt = f"""
-    You are comparing these research paper summaries. Highlight key overlapping points, contradictions,
-    agreements, and notable gaps or future research opportunities.
+You are comparing these research paper summaries. Highlight key overlapping points, contradictions,
+agreements, and notable gaps or future research opportunities.
 
-    Summaries:
-    {summaries}
+Summaries:
+{summaries}
 
-    Provide a comprehensive comparison report.
-    """
-    response = llm.run(prompt)
-    return response
+Provide a comprehensive comparison report.
+"""
+    return call_deepseek_chat(prompt)
+
 
 # ---------------- DISPLAY UI ----------------
 
@@ -166,8 +161,8 @@ if new_docs:
 
     for idx, doc in enumerate(new_docs):
         paper_text = doc.page_content
-        summary = generate_multi_level_summary(paper_text, llm)
-        paper_summaries.append(f"Paper {idx+1}: {uploaded_files[idx].name}\n{summary}")
+        summary = generate_multi_level_summary(paper_text)
+        paper_summaries.append(f"Paper {idx + 1}: {uploaded_files[idx].name}\n{summary}")
 
     st.subheader("Multi-level Summaries")
     for idx, summ in enumerate(paper_summaries):
@@ -175,7 +170,6 @@ if new_docs:
             st.write(summ)
 
     if len(paper_summaries) > 1:
-        comparison = compare_papers_summaries("\n\n".join(paper_summaries), llm)
+        comparison = compare_papers_summaries("\n\n".join(paper_summaries))
         st.subheader("Cross-Paper Comparison Report")
         st.write(comparison)
-
