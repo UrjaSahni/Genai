@@ -13,3 +13,4 @@ streamlit
 torch
 transformers
 unstructured
+openai
