@@ -3,8 +3,6 @@ fpdf2
 langchain
 langchain-community
 langchain-together
-langchain_community
-langchain_together
 Pillow
 pypdf
 python-docx
