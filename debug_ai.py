@@ -26,11 +26,12 @@ def test_api_connection():
     
     print(f"   ✅ API key found")
     print(f"   📏 Length: {len(api_key)} characters")
-    print(f"   🔍 Starts with 'sk-or-': {'✅' if api_key.startswith('sk-or-') else '❌'}")
-    print(f"   🔒 Key preview: {api_key[:15]}...{api_key[-5:]}")
+    print(f"   🔍 Starts with correct format: {'✅' if api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-') else '❌'}")
+    print(f"   🔒 Key preview: {api_key[:20]}...{api_key[-8:]}")
     
-    if not api_key.startswith('sk-or-'):
+    if not (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')):
         print("   ❌ Invalid API key format")
+        print("   💡 OpenRouter keys should start with 'sk-or-v1-' or 'sk-or-'")
         return False
     
     # Test connection
