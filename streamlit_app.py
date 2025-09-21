@@ -4,123 +4,134 @@ import streamlit as st
 import io
 import json
 from typing import List, Dict, Any
-from openai import OpenAI
 from dotenv import load_dotenv
 import PyPDF2
 from fpdf import FPDF
+import torch
+from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
+import warnings
+warnings.filterwarnings("ignore")
 
 # ---------------- SETUP ----------------
 load_dotenv()
 
 st.set_page_config(
-    page_title="AI Research Paper Summarizer & Comparator 🔬", 
+    page_title="AI Research Paper Summarizer & Comparator 🔬",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better UI
+# Custom CSS for better UI (same as before)
 st.markdown("""
 <style>
-.main-header {
-    text-align: center;
-    color: #2E86AB;
-    font-size: 2.5rem;
-    font-weight: bold;
-    margin-bottom: 1rem;
-}
-.sub-header {
-    text-align: center;
-    color: #666;
-    font-size: 1.2rem;
-    margin-bottom: 2rem;
-}
-.paper-card {
-    background: #f8f9fa;
-    padding: 1rem;
-    border-radius: 10px;
-    border-left: 4px solid #2E86AB;
-    margin: 1rem 0;
-}
-.summary-box {
-    background: #e8f4fd;
-    padding: 1.5rem;
-    border-radius: 10px;
-    margin: 1rem 0;
-}
-.comparison-box {
-    background: #f0f8e8;
-    padding: 1.5rem;
-    border-radius: 10px;
-    margin: 1rem 0;
-}
-.insight-box {
-    background: #fff3cd;
-    padding: 1.5rem;
-    border-radius: 10px;
-    margin: 1rem 0;
-}
-.stButton > button {
-    background-color: #2E86AB;
-    color: white;
-    border-radius: 10px;
-    border: none;
-    padding: 0.5rem 1rem;
-    font-weight: bold;
-}
-.stButton > button:hover {
-    background-color: #1B5E7F;
-}
-.token-status {
-    padding: 0.5rem;
-    border-radius: 5px;
-    margin: 0.5rem 0;
-}
-.token-success {
-    background-color: #d4edda;
-    color: #155724;
-    border: 1px solid #c3e6cb;
-}
-.token-error {
-    background-color: #f8d7da;
-    color: #721c24;
-    border: 1px solid #f5c6cb;
-}
+    .main-header {
+        background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .feature-box {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 4px solid #007acc;
+        margin: 10px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    
+    .result-box {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+        margin: 15px 0;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    .author-info {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        margin: 10px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    
+    .metric-container {
+        background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+        color: white;
+        padding: 15px;
+        border-radius: 10px;
+        text-align: center;
+        margin: 10px 0;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- OPENROUTER CLIENT SETUP ----------------
-def setup_openrouter_client():
-    """Initialize OpenRouter client with error handling"""
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    
-    # Check if API key exists
-    if not api_key:
-        return None, "OPENROUTER_API_KEY not found in environment variables!"
-    
-    # Validate API key format (updated for new format)
-    if not (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')):
-        return None, "Invalid API key format. OpenRouter API keys should start with 'sk-or-v1-' or 'sk-or-'"
-    
+# ---------------- HUGGING FACE MODEL SETUP ----------------
+@st.cache_resource
+def load_huggingface_model():
+    """Load DeepSeek model from Hugging Face with caching"""
     try:
-        client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=api_key,
+        model_name = "deepseek-ai/DeepSeek-V3.1-Base"
+        hf_token = os.getenv("HF_TOKEN")
+        
+        if not hf_token:
+            return None, "HF_TOKEN not found in environment variables!"
+        
+        # Check if CUDA is available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        st.info(f"Loading model on {device}. This may take a few minutes...")
+        
+        # Load tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            token=hf_token,
+            trust_remote_code=True
         )
         
-        # Don't test connection here to avoid caching issues
-        return client, "OpenRouter client initialized successfully!"
+        # Load model with appropriate settings
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            token=hf_token,
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None,
+            low_cpu_mem_usage=True
+        )
+        
+        # Create pipeline
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=tokenizer,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None
+        )
+        
+        return pipe, f"DeepSeek-V3.1-Base loaded successfully on {device}!"
         
     except Exception as e:
-        return None, f"Failed to initialize OpenRouter client: {str(e)}"
+        return None, f"Failed to load model: {str(e)}"
 
-# Initialize client
-openrouter_client, client_status = setup_openrouter_client()
+# Initialize model
+with st.spinner("Loading DeepSeek model... This may take a few minutes on first run."):
+    text_generator, model_status = load_huggingface_model()
 
-# Display client status
-if openrouter_client is None:
-    st.error(f"❌ {client_status}")
+# Display model status
+if text_generator is None:
+    st.error(f"❌ {model_status}")
+    st.info("💡 Make sure you have set your HF_TOKEN in the .env file")
+    st.stop()
 else:
-    st.success(f"✅ {client_status}")
+    st.success(f"✅ {model_status}")
 
 # ---------------- DOCUMENT PROCESSING ----------------
 class SimpleDocumentProcessor:
@@ -160,509 +171,392 @@ class SimpleDocumentProcessor:
 
 # ---------------- AI SUMMARIZER ----------------
 class ResearchSummarizer:
-    def __init__(self, client):
-        self.client = client
-        self.model = "deepseek/deepseek-chat-v3.1:free"
+    def __init__(self, text_generator):
+        self.text_generator = text_generator
     
     def generate_summary(self, content: str, summary_type: str = "comprehensive") -> str:
-        """Generate summary using OpenRouter"""
-        if not self.client:
-            return "❌ Error: AI client not available. Please check your OpenRouter API key."
+        """Generate summary using Hugging Face DeepSeek model"""
+        if not self.text_generator:
+            return "❌ Error: Text generator not available. Please check your model loading."
         
         # Truncate content to avoid token limits
-        max_content_length = 3000  # Reduced to be safe
+        max_content_length = 2000  # Reduced for base model
         if len(content) > max_content_length:
             content = content[:max_content_length] + "..."
-            
+        
         prompts = {
-            "comprehensive": f"""
-            Please provide a comprehensive summary of this research paper including:
-            1. Main objective and research question
-            2. Methodology used
-            3. Key findings and results
-            4. Conclusions and implications
-            5. Limitations and future work
+            "comprehensive": f"""Please provide a comprehensive summary of this research paper including:
+1. Main objective and research question
+2. Methodology used
+3. Key findings and results
+4. Conclusions and implications
+5. Limitations and future work
+
+Research Paper Content:
+{content}
+
+Summary:""",
             
-            Research Paper Content:
-            {content}
-            """,
-            "key_insights": f"""
-            Extract the most important insights and findings from this research paper.
-            Focus on novel contributions, significant results, and practical implications.
-            Present the insights in a clear, structured format.
+            "key_insights": f"""Extract the most important insights and findings from this research paper. Focus on:
+- Novel contributions
+- Significant results
+- Practical implications
+- Key takeaways
+
+Research Paper Content:
+{content}
+
+Key Insights:""",
             
-            Research Paper Content:
-            {content}
-            """,
-            "methodology": f"""
-            Summarize the research methodology, experimental design, and analytical approaches used in this paper.
-            Include details about data collection, analysis methods, and experimental setup.
-            
-            Research Paper Content:
-            {content}
-            """
+            "methodology": f"""Summarize the research methodology, experimental design, and analytical approaches used in this paper. Include details about:
+- Data collection methods
+- Analysis techniques
+- Experimental setup
+- Variables and measurements
+
+Research Paper Content:
+{content}
+
+Methodology Summary:"""
         }
         
         try:
-            # Make sure we have a valid API key
-            api_key = os.getenv("OPENROUTER_API_KEY")
-            if not api_key or not (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')):
-                return "❌ Error: Invalid or missing OpenRouter API key"
+            prompt = prompts.get(summary_type, prompts["comprehensive"])
             
-            # Create a fresh client instance to avoid any caching issues
-            client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=api_key,
+            # Generate response using the pipeline
+            response = self.text_generator(
+                prompt,
+                max_new_tokens=500,
+                temperature=0.3,
+                do_sample=True,
+                pad_token_id=self.text_generator.tokenizer.eos_token_id,
+                eos_token_id=self.text_generator.tokenizer.eos_token_id,
+                repetition_penalty=1.1
             )
             
-            response = client.chat.completions.create(
-                extra_headers={
-                    "HTTP-Referer": "https://github.com/research-summarizer",
-                    "X-Title": "AI Research Paper Summarizer",
-                },
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": prompts.get(summary_type, prompts["comprehensive"])
-                }],
-                max_tokens=1500,  # Reduced to avoid limits
-                temperature=0.3
-            )
-            return response.choices[0].message.content
+            # Extract generated text (remove the original prompt)
+            generated_text = response[0]['generated_text']
+            summary = generated_text.replace(prompt, "").strip()
+            
+            return summary if summary else "❌ Unable to generate summary. Please try with a different document."
             
         except Exception as e:
-            error_msg = str(e).lower()
-            if "401" in error_msg or "unauthorized" in error_msg:
-                return "❌ Authentication Error: Invalid OpenRouter API key. Please check your key at https://openrouter.ai/keys"
-            elif "429" in error_msg or "rate limit" in error_msg:
-                return "❌ Rate Limit Error: Too many requests. Please wait a moment and try again."
-            elif "400" in error_msg or "bad request" in error_msg:
-                return "❌ Request Error: The content may be too long or contain invalid characters."
-            elif "503" in error_msg or "service unavailable" in error_msg:
-                return "❌ Service Error: The AI model is temporarily unavailable. Please try again later."
-            elif "timeout" in error_msg:
-                return "❌ Timeout Error: Request took too long. Please try with a shorter document."
-            else:
-                return f"❌ API Error: {str(e)[:200]}..."
+            return f"❌ Error generating summary: {str(e)}"
     
     def compare_papers(self, summaries: List[str], titles: List[str]) -> str:
         """Compare multiple research papers"""
-        if not self.client:
-            return "❌ Error: AI client not available. Please check your OpenRouter API key."
-            
-        comparison_prompt = f"""
-        Compare and analyze the following research papers. Provide a detailed analysis including:
+        if not self.text_generator:
+            return "❌ Error: Text generator not available."
         
-        1. **Common Themes and Areas of Agreement:**
-           - Shared research objectives
-           - Similar methodological approaches
-           - Consistent findings across papers
-        
-        2. **Contradictory Findings or Approaches:**
-           - Conflicting results
-           - Different methodological choices
-           - Opposing conclusions
-        
-        3. **Research Gaps and Unexplored Areas:**
-           - Topics not covered by any paper
-           - Limitations mentioned across studies
-           - Future research opportunities
-        
-        4. **Methodological Differences:**
-           - Different experimental designs
-           - Varied data collection methods
-           - Alternative analytical approaches
-        
-        5. **Overall Synthesis and Key Insights:**
-           - What can we learn from these papers collectively?
-           - How do they contribute to the field?
-           - Recommendations for future research
-        
-        Papers to analyze:
-        """
+        comparison_prompt = f"""Compare and analyze the following research papers. Provide a detailed analysis including:
+
+1. Common Themes and Areas of Agreement
+2. Contradictory Findings or Approaches
+3. Research Gaps and Unexplored Areas
+4. Methodological Differences
+5. Overall Synthesis and Key Insights
+
+Papers to analyze:
+"""
         
         for i, (title, summary) in enumerate(zip(titles, summaries), 1):
-            comparison_prompt += f"\n**Paper {i}: {title}**\n{summary[:1500]}\n"
+            comparison_prompt += f"\nPaper {i}: {title}\n{summary[:800]}\n"
+        
+        comparison_prompt += "\nComparative Analysis:"
         
         try:
-            response = self.client.chat.completions.create(
-                extra_headers={
-                    "HTTP-Referer": "https://github.com/research-summarizer",
-                    "X-Title": "AI Research Paper Comparator",
-                },
-                model=self.model,
-                messages=[{
-                    "role": "user",
-                    "content": comparison_prompt
-                }],
-                max_tokens=3000,
-                temperature=0.3
+            response = self.text_generator(
+                comparison_prompt,
+                max_new_tokens=800,
+                temperature=0.3,
+                do_sample=True,
+                pad_token_id=self.text_generator.tokenizer.eos_token_id,
+                repetition_penalty=1.1
             )
-            return response.choices[0].message.content
+            
+            # Extract generated text
+            generated_text = response[0]['generated_text']
+            comparison = generated_text.replace(comparison_prompt, "").strip()
+            
+            return comparison if comparison else "❌ Unable to generate comparison."
+            
         except Exception as e:
-            error_msg = str(e)
-            if "401" in error_msg:
-                return "❌ Authentication Error: Please check your OpenRouter API key."
-            else:
-                return f"❌ Error comparing papers: {error_msg}"
+            return f"❌ Error comparing papers: {str(e)}"
 
 # ---------------- MAIN APPLICATION ----------------
 def main():
     # Header
-    st.markdown('<div class="main-header">🔬 AI Research Paper Summarizer & Comparator</div>', 
-                unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Upload research papers and get AI-powered summaries and comparative analysis</div>', 
-                unsafe_allow_html=True)
+    st.markdown('''
+    <div class="main-header">
+        <h1>🔬 AI-Powered Research Paper Summarizer & Comparator</h1>
+        <p style="font-size: 18px; margin-bottom: 0;">Built with Streamlit | Powered by DeepSeek-V3.1-Base via Hugging Face</p>
+    </div>
     
-    # Initialize processors
+    <div class="author-info">
+        <h3 style="margin: 0;">Authors: Urja Sahni & Sahil Kumar Sahoo</h3>
+        <p style="margin: 5px 0 0 0; opacity: 0.9;">Model: deepseek-ai/DeepSeek-V3.1-Base</p>
+    </div>
+    ''', unsafe_allow_html=True)
+    
+    # Initialize components
     doc_processor = SimpleDocumentProcessor()
-    summarizer = ResearchSummarizer(openrouter_client)
+    ai_summarizer = ResearchSummarizer(text_generator)
     
-    # Initialize session state
-    if 'papers' not in st.session_state:
-        st.session_state.papers = []
-    if 'summaries' not in st.session_state:
-        st.session_state.summaries = []
-    
-    # Sidebar
+    # Sidebar for features
     with st.sidebar:
-        st.markdown("## 📚 Upload Research Papers")
+        st.markdown("### 🎯 Key Features")
         
-        # Show API key status
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if api_key and (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')) and len(api_key) > 20:
-            st.markdown('<div class="token-status token-success">✅ OpenRouter API Key: Configured</div>', 
-                       unsafe_allow_html=True)
-            
-            # Test API connection
-            if st.button("🔍 Test API Connection"):
-                with st.spinner("Testing connection..."):
-                    test_client = OpenAI(
-                        base_url="https://openrouter.ai/api/v1",
-                        api_key=api_key,
-                    )
-                    try:
-                        test_response = test_client.chat.completions.create(
-                            extra_headers={
-                                "HTTP-Referer": "https://github.com/research-summarizer",
-                                "X-Title": "Connection Test",
-                            },
-                            model="deepseek/deepseek-chat-v3.1:free",
-                            messages=[{"role": "user", "content": "Hello, just testing the connection."}],
-                            max_tokens=10
-                        )
-                        st.success("✅ API connection successful!")
-                    except Exception as e:
-                        st.error(f"❌ API connection failed: {str(e)}")
-        else:
-            st.markdown('<div class="token-status token-error">❌ OpenRouter API Key: Not configured</div>', 
-                       unsafe_allow_html=True)
-            st.markdown("""
-            **Setup Required:**
-            1. Go to [OpenRouter Keys](https://openrouter.ai/keys)
-            2. Create a new API key
-            3. Update your .env file: `OPENROUTER_API_KEY=your_key_here`
-            4. Restart the application
-            
-            **Your current key status:**
-            - Exists: {'✅' if api_key else '❌'}
-            - Correct format: {'✅' if api_key and (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')) else '❌'}
-            - Sufficient length: {'✅' if api_key and len(api_key) > 20 else '❌'}
-            """)
+        st.markdown('''
+        <div class="feature-box">
+            <h4>📄 Document Processing</h4>
+            <p>Support for PDF and text files with automatic text extraction</p>
+        </div>
         
-        uploaded_files = st.file_uploader(
-            "Select research papers",
-            type=["pdf", "txt", "md"],
-            accept_multiple_files=True,
-            help="Upload PDF or text files containing research papers"
-        )
+        <div class="feature-box">
+            <h4>🤖 Local AI Processing</h4>
+            <p>DeepSeek-V3.1-Base model running via Hugging Face Transformers</p>
+        </div>
         
-        # Processing options
-        st.markdown("## ⚙️ Processing Options")
-        summary_type = st.selectbox(
-            "Summary Type",
-            ["comprehensive", "key_insights", "methodology"],
-            help="Choose the type of summary to generate"
-        )
+        <div class="feature-box">
+            <h4>📊 Comparison Tool</h4>
+            <p>Compare multiple research papers side-by-side</p>
+        </div>
         
-        # Model info
-        st.markdown("## 🤖 AI Model Info")
-        st.info("**Model:** DeepSeek Chat V3.1 (Free)\n**Provider:** OpenRouter")
+        <div class="feature-box">
+            <h4>⚡ Multiple Summary Types</h4>
+            <p>Comprehensive, Key Insights, and Methodology-focused summaries</p>
+        </div>
+        ''', unsafe_allow_html=True)
         
-        # Clear papers button
-        if st.button("🗑️ Clear All Papers"):
-            st.session_state.papers = []
-            st.session_state.summaries = []
-            st.rerun()
-        
-        # Instructions
-        st.markdown("## 📝 Instructions")
-        st.markdown("""
-        1. **Setup**: Configure OpenRouter API key
-        2. **Upload**: Add PDF or text files
-        3. **Process**: Choose summary type
-        4. **Analyze**: View individual summaries
-        5. **Compare**: Generate comparative analysis
-        6. **Export**: Download results as PDF/JSON
+        st.markdown("---")
+        st.markdown("### 💡 System Requirements")
+        st.markdown(f"""
+        - **GPU Available**: {'✅ Yes' if torch.cuda.is_available() else '❌ No (CPU only)'}
+        - **Model**: DeepSeek-V3.1-Base
+        - **Memory**: {torch.cuda.get_device_properties(0).total_memory // 1024**3 if torch.cuda.is_available() else 'N/A'} GB VRAM
         """)
     
-    # Main content area
-    col1, col2 = st.columns([1, 1])
+    # Main tabs
+    tab1, tab2, tab3 = st.tabs(["📄 Single Paper Analysis", "📊 Multiple Papers Comparison", "ℹ️ About"])
     
-    with col1:
-        st.markdown("### 📄 Uploaded Papers")
+    with tab1:
+        st.markdown("### Upload and Analyze a Single Research Paper")
         
-        # Process uploaded files
-        if uploaded_files:
-            for uploaded_file in uploaded_files:
-                # Check if paper already exists
-                if not any(paper['name'] == uploaded_file.name for paper in st.session_state.papers):
-                    with st.spinner(f"Processing {uploaded_file.name}..."):
-                        # Save temporary file
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
-                            tmp_file.write(uploaded_file.read())
-                            tmp_path = tmp_file.name
-                        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Choose a research paper (PDF or TXT)",
+                type=['pdf', 'txt'],
+                help="Upload a PDF or text file containing your research paper"
+            )
+        
+        with col2:
+            summary_type = st.selectbox(
+                "Summary Type",
+                ["comprehensive", "key_insights", "methodology"],
+                format_func=lambda x: {
+                    "comprehensive": "🔍 Comprehensive Summary",
+                    "key_insights": "💡 Key Insights",
+                    "methodology": "🔬 Methodology Focus"
+                }[x]
+            )
+        
+        if uploaded_file is not None:
+            # Show file info
+            file_details = {
+                "Filename": uploaded_file.name,
+                "File size": f"{uploaded_file.size / 1024:.1f} KB",
+                "File type": uploaded_file.type
+            }
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown(f'<div class="metric-container"><h4>{file_details["Filename"]}</h4><p>Filename</p></div>', unsafe_allow_html=True)
+            with col2:
+                st.markdown(f'<div class="metric-container"><h4>{file_details["File size"]}</h4><p>File Size</p></div>', unsafe_allow_html=True)
+            with col3:
+                st.markdown(f'<div class="metric-container"><h4>{file_details["File type"]}</h4><p>File Type</p></div>', unsafe_allow_html=True)
+            
+            # Process file
+            if st.button("🚀 Generate Summary", type="primary", use_container_width=True):
+                with st.spinner("Processing your research paper with DeepSeek model..."):
+                    # Save uploaded file temporarily
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_file_path = tmp_file.name
+                    
+                    try:
                         # Extract text
-                        file_type = uploaded_file.name.split('.')[-1].lower()
-                        content = doc_processor.process_file(tmp_path, file_type)
+                        file_extension = uploaded_file.name.split('.')[-1].lower()
+                        extracted_text = doc_processor.process_file(tmp_file_path, file_extension)
                         
-                        if content.strip():
-                            # Store paper info
-                            paper_info = {
-                                'name': uploaded_file.name,
-                                'content': content,
-                                'processed': True
-                            }
-                            st.session_state.papers.append(paper_info)
+                        if extracted_text.strip():
+                            st.markdown(f'<div class="result-box">', unsafe_allow_html=True)
+                            st.markdown(f"### 📋 Summary ({summary_type.replace('_', ' ').title()})")
                             
-                            # Generate summary - always try even if client setup failed
-                            with st.spinner("Generating AI summary..."):
-                                try:
-                                    # Create fresh client for each request to avoid session issues
-                                    fresh_api_key = os.getenv("OPENROUTER_API_KEY")
-                                    if fresh_api_key and (fresh_api_key.startswith('sk-or-v1-') or fresh_api_key.startswith('sk-or-')):
-                                        fresh_client = OpenAI(
-                                            base_url="https://openrouter.ai/api/v1",
-                                            api_key=fresh_api_key,
-                                        )
-                                        fresh_summarizer = ResearchSummarizer(fresh_client)
-                                        summary = fresh_summarizer.generate_summary(content, summary_type)
-                                    else:
-                                        summary = "❌ Summary not generated: API key not properly configured"
-                                        
-                                    st.session_state.summaries.append({
-                                        'title': uploaded_file.name,
-                                        'summary': summary,
-                                        'type': summary_type
-                                    })
-                                except Exception as e:
-                                    error_summary = f"❌ Error generating summary: {str(e)}"
-                                    st.session_state.summaries.append({
-                                        'title': uploaded_file.name,
-                                        'summary': error_summary,
-                                        'type': summary_type
-                                    })
+                            # Generate summary
+                            with st.spinner("DeepSeek model is analyzing your paper..."):
+                                summary = ai_summarizer.generate_summary(extracted_text, summary_type)
                             
-                            st.success(f"✅ Successfully processed {uploaded_file.name}")
+                            st.markdown(summary)
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            # Show extracted text preview
+                            with st.expander("📖 View Extracted Text (Preview)"):
+                                preview_length = min(1000, len(extracted_text))
+                                st.text_area(
+                                    "Document Content",
+                                    extracted_text[:preview_length] + ("..." if len(extracted_text) > preview_length else ""),
+                                    height=200,
+                                    disabled=True
+                                )
+                                st.info(f"Showing first {preview_length} characters of {len(extracted_text)} total characters")
                         else:
-                            st.warning(f"⚠️ No text content found in {uploaded_file.name}")
-                        
-                        # Clean up
+                            st.error("❌ Could not extract text from the uploaded file. Please check if the file is valid.")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Error processing file: {str(e)}")
+                    
+                    finally:
+                        # Clean up temporary file
                         try:
-                            os.unlink(tmp_path)
+                            os.unlink(tmp_file_path)
                         except:
                             pass
-        
-        # Display uploaded papers
-        if st.session_state.papers:
-            for i, paper in enumerate(st.session_state.papers):
-                with st.expander(f"📑 {paper['name']}", expanded=False):
-                    st.markdown(f"**Status:** {'✅ Processed' if paper['processed'] else '⏳ Processing...'}")
-                    st.markdown(f"**File Size:** {len(paper['content'])} characters")
-                    st.markdown(f"**Content Preview:**")
-                    preview_text = paper['content'][:500] + "..." if len(paper['content']) > 500 else paper['content']
-                    st.text_area("Content", preview_text, height=150, key=f"content_{i}", disabled=True)
-        else:
-            st.info("📤 No papers uploaded yet. Use the sidebar to upload research papers.")
     
-    with col2:
-        st.markdown("### 📊 Analysis & Summaries")
+    with tab2:
+        st.markdown("### Compare Multiple Research Papers")
         
-        if st.session_state.summaries:
-            # Display individual summaries
-            for i, summary in enumerate(st.session_state.summaries):
-                with st.expander(f"📄 {summary['title']}", expanded=True):
-                    st.markdown(f"**Summary Type:** {summary['type'].title()}")
-                    if summary['summary'].startswith('❌'):
-                        st.error(summary['summary'])
-                    else:
-                        st.markdown(f'<div class="summary-box">{summary["summary"]}</div>', 
-                                   unsafe_allow_html=True)
-        else:
-            st.info("📋 No summaries available yet. Upload papers to generate summaries.")
+        st.markdown('''
+        <div class="feature-box">
+            <h4>📊 Multi-Paper Analysis</h4>
+            <p>Upload 2-3 research papers to compare methodologies, findings, and insights across studies.</p>
+            <p><strong>Note:</strong> Due to model limitations, please use shorter papers for comparison.</p>
+        </div>
+        ''', unsafe_allow_html=True)
         
-        # Comparison section
-        if len(st.session_state.summaries) >= 2:
-            st.markdown("---")
-            st.markdown("### 🔄 Comparative Analysis")
+        uploaded_files = st.file_uploader(
+            "Choose research papers (PDF or TXT)",
+            type=['pdf', 'txt'],
+            accept_multiple_files=True,
+            help="Upload 2-3 research papers for comparison (smaller files recommended)"
+        )
+        
+        if uploaded_files and len(uploaded_files) >= 2:
+            st.success(f"✅ {len(uploaded_files)} files uploaded successfully!")
             
-            # Only show button if we have valid summaries
-            valid_summaries = [s for s in st.session_state.summaries if not s['summary'].startswith('❌')]
+            # Show files info
+            st.markdown("### 📁 Uploaded Files")
+            for i, file in enumerate(uploaded_files, 1):
+                st.write(f"**{i}.** {file.name} ({file.size/1024:.1f} KB)")
             
-            if len(valid_summaries) >= 2:
-                if st.button("🔍 Generate Comparative Analysis", type="primary"):
-                    with st.spinner("Generating comparative analysis..."):
-                        summaries_text = [s['summary'] for s in valid_summaries]
-                        titles = [s['title'] for s in valid_summaries]
-                        
-                        comparison = summarizer.compare_papers(summaries_text, titles)
-                        
-                        if comparison.startswith('❌'):
-                            st.error(comparison)
-                        else:
-                            st.markdown(f'<div class="comparison-box">', unsafe_allow_html=True)
-                            st.markdown("**🔄 Comparative Analysis Results:**")
-                            st.markdown(comparison)
-                            st.markdown('</div>', unsafe_allow_html=True)
-            else:
-                st.warning("⚠️ Need at least 2 successfully processed papers for comparison")
-        elif len(st.session_state.summaries) == 1:
-            st.info("📝 Upload one more paper to enable comparative analysis")
-    
-    # Export section
-    if st.session_state.summaries:
-        st.markdown("---")
-        st.markdown("### 💾 Export Results")
-        
-        col_export1, col_export2, col_export3 = st.columns(3)
-        
-        with col_export1:
-            if st.button("📄 Export as PDF"):
-                try:
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_font("Arial", size=12)
+            if st.button("🔍 Compare Papers", type="primary", use_container_width=True):
+                if len(uploaded_files) > 3:
+                    st.warning("⚠️ Please upload maximum 3 files for optimal performance with the base model.")
+                else:
+                    summaries = []
+                    titles = []
                     
-                    # Add title
-                    pdf.set_font("Arial", 'B', 16)
-                    pdf.cell(0, 10, "Research Paper Analysis Report", ln=True, align='C')
-                    pdf.ln(10)
-                    
-                    # Add metadata
-                    pdf.set_font("Arial", size=10)
-                    pdf.cell(0, 8, f"Generated using DeepSeek Chat V3.1 via OpenRouter", ln=True)
-                    pdf.cell(0, 8, f"Number of papers analyzed: {len(st.session_state.papers)}", ln=True)
-                    pdf.ln(5)
-                    
-                    # Add summaries
-                    for i, summary in enumerate(st.session_state.summaries, 1):
-                        pdf.set_font("Arial", 'B', 14)
-                        title = summary['title'].encode('latin1', 'ignore').decode('latin1')
-                        pdf.cell(0, 10, f"Paper {i}: {title}", ln=True)
+                    with st.spinner("Processing and comparing papers with DeepSeek model..."):
+                        progress_bar = st.progress(0)
                         
-                        pdf.set_font("Arial", 'I', 10)
-                        pdf.cell(0, 8, f"Summary Type: {summary['type'].title()}", ln=True)
+                        for i, uploaded_file in enumerate(uploaded_files):
+                            # Update progress
+                            progress = (i + 1) / len(uploaded_files)
+                            progress_bar.progress(progress)
+                            st.write(f"Processing {uploaded_file.name}...")
+                            
+                            # Save file temporarily
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+                                tmp_file.write(uploaded_file.getvalue())
+                                tmp_file_path = tmp_file.name
+                            
+                            try:
+                                # Extract text and generate summary
+                                file_extension = uploaded_file.name.split('.')[-1].lower()
+                                extracted_text = doc_processor.process_file(tmp_file_path, file_extension)
+                                
+                                if extracted_text.strip():
+                                    summary = ai_summarizer.generate_summary(extracted_text, "comprehensive")
+                                    summaries.append(summary)
+                                    titles.append(uploaded_file.name)
+                                else:
+                                    st.error(f"❌ Could not extract text from {uploaded_file.name}")
+                            
+                            except Exception as e:
+                                st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                            
+                            finally:
+                                try:
+                                    os.unlink(tmp_file_path)
+                                except:
+                                    pass
                         
-                        pdf.set_font("Arial", size=10)
-                        clean_summary = summary['summary'].encode('latin1', 'ignore').decode('latin1')
-                        pdf.multi_cell(0, 6, clean_summary)
-                        pdf.ln(8)
+                        progress_bar.progress(1.0)
                     
-                    # Create download
-                    pdf_output = pdf.output(dest='S')
-                    if isinstance(pdf_output, str):
-                        pdf_bytes = pdf_output.encode('latin1')
+                    if summaries and len(summaries) >= 2:
+                        st.markdown('<div class="result-box">', unsafe_allow_html=True)
+                        st.markdown("### 📊 Comparative Analysis")
+                        
+                        with st.spinner("Generating comparative analysis with DeepSeek..."):
+                            comparison = ai_summarizer.compare_papers(summaries, titles)
+                        
+                        st.markdown(comparison)
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Show individual summaries
+                        with st.expander("📄 Individual Paper Summaries"):
+                            for title, summary in zip(titles, summaries):
+                                st.markdown(f"#### {title}")
+                                st.markdown(summary)
+                                st.markdown("---")
                     else:
-                        pdf_bytes = pdf_output
-                    
-                    st.download_button(
-                        "⬇️ Download PDF Report",
-                        data=pdf_bytes,
-                        file_name="research_analysis_report.pdf",
-                        mime="application/pdf"
-                    )
-                except Exception as e:
-                    st.error(f"PDF export error: {str(e)}")
+                        st.error("❌ Not enough valid papers processed for comparison. Please check your files.")
         
-        with col_export2:
-            if st.button("📊 Export as JSON"):
-                export_data = {
-                    'metadata': {
-                        'ai_model': 'deepseek/deepseek-chat-v3.1:free',
-                        'provider': 'OpenRouter',
-                        'total_papers': len(st.session_state.papers)
-                    },
-                    'papers': [
-                        {
-                            'name': p['name'], 
-                            'content_length': len(p['content']),
-                            'content_preview': p['content'][:500] + "..." if len(p['content']) > 500 else p['content']
-                        } 
-                        for p in st.session_state.papers
-                    ],
-                    'summaries': st.session_state.summaries
-                }
-                
-                json_str = json.dumps(export_data, indent=2)
-                
-                st.download_button(
-                    "⬇️ Download JSON Data",
-                    data=json_str,
-                    file_name="research_analysis_data.json",
-                    mime="application/json"
-                )
-        
-        with col_export3:
-            if st.button("📋 Export Summary Text"):
-                # Create plain text summary
-                text_content = "RESEARCH PAPER ANALYSIS SUMMARY\n"
-                text_content += "=" * 50 + "\n\n"
-                
-                for i, summary in enumerate(st.session_state.summaries, 1):
-                    text_content += f"PAPER {i}: {summary['title']}\n"
-                    text_content += f"Summary Type: {summary['type'].title()}\n"
-                    text_content += "-" * 30 + "\n"
-                    text_content += f"{summary['summary']}\n\n"
-                
-                st.download_button(
-                    "⬇️ Download Text Summary",
-                    data=text_content,
-                    file_name="research_summary.txt",
-                    mime="text/plain"
-                )
+        elif uploaded_files and len(uploaded_files) == 1:
+            st.info("ℹ️ Please upload at least 2 files for comparison.")
     
-    # Status and Statistics
-    if st.session_state.papers:
-        st.markdown("---")
-        st.markdown("### 📈 Statistics")
+    with tab3:
+        st.markdown("### ℹ️ About This Application")
         
-        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        st.markdown('''
+        <div class="feature-box">
+            <h4>🎯 Purpose</h4>
+            <p>This application helps researchers, students, and academics quickly summarize and compare research papers using the DeepSeek-V3.1-Base model via Hugging Face Transformers.</p>
+        </div>
         
-        with col_stat1:
-            st.metric("Papers Uploaded", len(st.session_state.papers))
+        <div class="feature-box">
+            <h4>⚙️ Technical Details</h4>
+            <ul>
+                <li><strong>AI Model:</strong> DeepSeek-V3.1-Base (671B parameters, 37B active)</li>
+                <li><strong>Provider:</strong> Hugging Face Transformers</li>
+                <li><strong>Frontend:</strong> Streamlit</li>
+                <li><strong>Document Processing:</strong> PyPDF2 for PDF extraction</li>
+                <li><strong>File Support:</strong> PDF, TXT formats</li>
+                <li><strong>Hardware:</strong> GPU acceleration when available</li>
+            </ul>
+        </div>
         
-        with col_stat2:
-            st.metric("Summaries Generated", len(st.session_state.summaries))
+        <div class="feature-box">
+            <h4>👥 Authors</h4>
+            <p><strong>Urja Sahni</strong> & <strong>Sahil Kumar Sahoo</strong></p>
+            <p>Final year students passionate about AI and research automation.</p>
+        </div>
         
-        with col_stat3:
-            total_chars = sum(len(p['content']) for p in st.session_state.papers)
-            st.metric("Total Content", f"{total_chars:,} chars")
-        
-        with col_stat4:
-            successful_summaries = len([s for s in st.session_state.summaries if not s['summary'].startswith('❌')])
-            st.metric("Success Rate", f"{(successful_summaries/len(st.session_state.summaries)*100):.0f}%" if st.session_state.summaries else "0%")
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style='text-align: center; color: #666;'>
-        <p>🔬 AI-Powered Research Paper Summarizer & Comparator</p>
-        <p>Built with Streamlit | Powered by DeepSeek via OpenRouter</p>
-        <p>Authors: Urja Sahni & Sahil Kumar Sahoo</p>
-        <p><small>Model: deepseek/deepseek-chat-v3.1:free</small></p>
-    </div>
-    """, unsafe_allow_html=True)
+        <div class="feature-box">
+            <h4>🔧 Setup Requirements</h4>
+            <p>To run this application, you need:</p>
+            <ul>
+                <li>Python 3.8+</li>
+                <li>Hugging Face token (for model access)</li>
+                <li>GPU with sufficient VRAM (recommended: 16GB+)</li>
+                <li>Required packages: streamlit, transformers, torch, PyPDF2, python-dotenv</li>
+            </ul>
+            <p><strong>Environment Variable:</strong> <code>HF_TOKEN</code></p>
+        </div>
+        ''', unsafe_allow_html=True)
 
+# Run the application
 if __name__ == "__main__":
     main()
