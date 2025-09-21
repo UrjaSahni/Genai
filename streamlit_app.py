@@ -97,9 +97,9 @@ def setup_openrouter_client():
     if not api_key:
         return None, "OPENROUTER_API_KEY not found in environment variables!"
     
-    # Validate API key format
-    if not api_key.startswith('sk-or-'):
-        return None, "Invalid API key format. OpenRouter API keys should start with 'sk-or-'"
+    # Validate API key format (updated for new format)
+    if not (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')):
+        return None, "Invalid API key format. OpenRouter API keys should start with 'sk-or-v1-' or 'sk-or-'"
     
     try:
         client = OpenAI(
@@ -206,7 +206,7 @@ class ResearchSummarizer:
         try:
             # Make sure we have a valid API key
             api_key = os.getenv("OPENROUTER_API_KEY")
-            if not api_key or not api_key.startswith('sk-or-'):
+            if not api_key or not (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')):
                 return "❌ Error: Invalid or missing OpenRouter API key"
             
             # Create a fresh client instance to avoid any caching issues
@@ -330,7 +330,7 @@ def main():
         
         # Show API key status
         api_key = os.getenv("OPENROUTER_API_KEY")
-        if api_key and api_key.startswith('sk-or-') and len(api_key) > 20:
+        if api_key and (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')) and len(api_key) > 20:
             st.markdown('<div class="token-status token-success">✅ OpenRouter API Key: Configured</div>', 
                        unsafe_allow_html=True)
             
@@ -365,9 +365,9 @@ def main():
             4. Restart the application
             
             **Your current key status:**
-            - Exists: ✅ if api_key else ❌
-            - Correct format: ✅ if api_key and api_key.startswith('sk-or-') else ❌
-            - Sufficient length: ✅ if api_key and len(api_key) > 20 else ❌
+            - Exists: {'✅' if api_key else '❌'}
+            - Correct format: {'✅' if api_key and (api_key.startswith('sk-or-v1-') or api_key.startswith('sk-or-')) else '❌'}
+            - Sufficient length: {'✅' if api_key and len(api_key) > 20 else '❌'}
             """)
         
         uploaded_files = st.file_uploader(
@@ -441,7 +441,7 @@ def main():
                                 try:
                                     # Create fresh client for each request to avoid session issues
                                     fresh_api_key = os.getenv("OPENROUTER_API_KEY")
-                                    if fresh_api_key and fresh_api_key.startswith('sk-or-'):
+                                    if fresh_api_key and (fresh_api_key.startswith('sk-or-v1-') or fresh_api_key.startswith('sk-or-')):
                                         fresh_client = OpenAI(
                                             base_url="https://openrouter.ai/api/v1",
                                             api_key=fresh_api_key,
