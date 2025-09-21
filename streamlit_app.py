@@ -6,22 +6,8 @@ import json
 from typing import List, Dict, Any
 from openai import OpenAI
 from dotenv import load_dotenv
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-    UnstructuredWordDocumentLoader,
-    UnstructuredMarkdownLoader
-)
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain.docstore.document import Document
+import PyPDF2
 from fpdf import FPDF
-import plotly.express as px
-import plotly.graph_objects as go
-from sentence_transformers import SentenceTransformer
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 
 # ---------------- SETUP ----------------
 load_dotenv()
@@ -93,55 +79,54 @@ def setup_hf_client():
     """Initialize Hugging Face client with error handling"""
     hf_token = os.getenv("HF_TOKEN", "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")
     
-    client = OpenAI(
-        base_url="https://router.huggingface.co/v1",
-        api_key=hf_token,
-    )
-    return client
+    try:
+        client = OpenAI(
+            base_url="https://router.huggingface.co/v1",
+            api_key=hf_token,
+        )
+        return client
+    except Exception as e:
+        st.error(f"Failed to initialize Hugging Face client: {str(e)}")
+        return None
 
 # Initialize client
-try:
-    hf_client = setup_hf_client()
-except Exception as e:
-    st.error(f"Failed to initialize Hugging Face client: {str(e)}")
-    st.stop()
+hf_client = setup_hf_client()
 
 # ---------------- DOCUMENT PROCESSING ----------------
-class DocumentProcessor:
+class SimpleDocumentProcessor:
     def __init__(self):
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000, 
-            chunk_overlap=200,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+        pass
     
-    def load_document(self, file_path: str, file_type: str) -> List[Document]:
-        """Load document based on file type"""
+    def extract_text_from_pdf(self, file_path: str) -> str:
+        """Extract text from PDF using PyPDF2"""
         try:
-            if file_type == "pdf":
-                loader = PyPDFLoader(file_path)
-            elif file_type == "docx":
-                loader = UnstructuredWordDocumentLoader(file_path)
-            elif file_type == "txt":
-                loader = TextLoader(file_path, encoding="utf-8")
-            elif file_type == "md":
-                loader = UnstructuredMarkdownLoader(file_path)
-            else:
-                return []
-            
-            return loader.load()
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                text = ""
+                for page in pdf_reader.pages:
+                    text += page.extract_text() + "\n"
+                return text
         except Exception as e:
-            st.error(f"Error loading document: {str(e)}")
-            return []
+            st.error(f"Error reading PDF: {str(e)}")
+            return ""
     
-    def process_documents(self, documents: List[Document]) -> FAISS:
-        """Process documents and create vector store"""
-        chunks = self.text_splitter.split_documents(documents)
-        vector_store = FAISS.from_documents(chunks, self.embeddings)
-        return vector_store
+    def extract_text_from_txt(self, file_path: str) -> str:
+        """Extract text from text file"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+        except Exception as e:
+            st.error(f"Error reading text file: {str(e)}")
+            return ""
+    
+    def process_file(self, file_path: str, file_type: str) -> str:
+        """Process file based on type"""
+        if file_type == "pdf":
+            return self.extract_text_from_pdf(file_path)
+        elif file_type in ["txt", "md"]:
+            return self.extract_text_from_txt(file_path)
+        else:
+            return ""
 
 # ---------------- AI SUMMARIZER ----------------
 class ResearchSummarizer:
@@ -151,6 +136,9 @@ class ResearchSummarizer:
     
     def generate_summary(self, content: str, summary_type: str = "comprehensive") -> str:
         """Generate summary using Hugging Face model"""
+        if not self.client:
+            return "Error: AI client not available"
+            
         prompts = {
             "comprehensive": f"""
             Please provide a comprehensive summary of this research paper including:
@@ -191,6 +179,9 @@ class ResearchSummarizer:
     
     def compare_papers(self, summaries: List[str], titles: List[str]) -> str:
         """Compare multiple research papers"""
+        if not self.client:
+            return "Error: AI client not available"
+            
         comparison_prompt = f"""
         Compare and analyze the following research papers. Identify:
         1. Common themes and areas of agreement
@@ -219,44 +210,6 @@ class ResearchSummarizer:
         except Exception as e:
             return f"Error comparing papers: {str(e)}"
 
-# ---------------- SIMILARITY ANALYZER ----------------
-class SimilarityAnalyzer:
-    def __init__(self):
-        self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-    
-    def calculate_similarity_matrix(self, texts: List[str], titles: List[str]) -> Dict:
-        """Calculate similarity matrix between documents"""
-        embeddings = self.model.encode(texts)
-        similarity_matrix = cosine_similarity(embeddings)
-        
-        return {
-            'matrix': similarity_matrix,
-            'titles': titles,
-            'embeddings': embeddings
-        }
-    
-    def create_similarity_visualization(self, similarity_data: Dict):
-        """Create similarity heatmap visualization"""
-        fig = go.Figure(data=go.Heatmap(
-            z=similarity_data['matrix'],
-            x=similarity_data['titles'],
-            y=similarity_data['titles'],
-            colorscale='Blues',
-            text=np.round(similarity_data['matrix'], 2),
-            texttemplate="%{text}",
-            textfont={"size": 10},
-            hoverongaps=False
-        ))
-        
-        fig.update_layout(
-            title="Research Paper Similarity Matrix",
-            xaxis_title="Papers",
-            yaxis_title="Papers",
-            font=dict(size=12)
-        )
-        
-        return fig
-
 # ---------------- MAIN APPLICATION ----------------
 def main():
     # Header
@@ -266,9 +219,8 @@ def main():
                 unsafe_allow_html=True)
     
     # Initialize processors
-    doc_processor = DocumentProcessor()
+    doc_processor = SimpleDocumentProcessor()
     summarizer = ResearchSummarizer(hf_client)
-    similarity_analyzer = SimilarityAnalyzer()
     
     # Initialize session state
     if 'papers' not in st.session_state:
@@ -281,9 +233,9 @@ def main():
         st.markdown("## 📚 Upload Research Papers")
         uploaded_files = st.file_uploader(
             "Select research papers",
-            type=["pdf", "docx", "txt", "md"],
+            type=["pdf", "txt", "md"],
             accept_multiple_files=True,
-            help="Upload PDF, Word documents, or text files containing research papers"
+            help="Upload PDF or text files containing research papers"
         )
         
         # Processing options
@@ -299,6 +251,16 @@ def main():
             st.session_state.papers = []
             st.session_state.summaries = []
             st.rerun()
+        
+        # Instructions
+        st.markdown("## 📝 Instructions")
+        st.markdown("""
+        1. Upload PDF or text files
+        2. Choose summary type
+        3. Wait for processing
+        4. View summaries and comparisons
+        5. Export results
+        """)
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -317,19 +279,15 @@ def main():
                             tmp_file.write(uploaded_file.read())
                             tmp_path = tmp_file.name
                         
-                        # Load and process document
+                        # Extract text
                         file_type = uploaded_file.name.split('.')[-1].lower()
-                        documents = doc_processor.load_document(tmp_path, file_type)
+                        content = doc_processor.process_file(tmp_path, file_type)
                         
-                        if documents:
-                            # Extract content for summarization
-                            content = "\n\n".join([doc.page_content for doc in documents])
-                            
+                        if content.strip():
                             # Store paper info
                             paper_info = {
                                 'name': uploaded_file.name,
                                 'content': content,
-                                'documents': documents,
                                 'processed': True
                             }
                             st.session_state.papers.append(paper_info)
@@ -341,31 +299,39 @@ def main():
                                 'summary': summary,
                                 'type': summary_type
                             })
+                            
+                            st.success(f"✅ Successfully processed {uploaded_file.name}")
+                        else:
+                            st.warning(f"⚠️ No text content found in {uploaded_file.name}")
                         
                         # Clean up
-                        os.unlink(tmp_path)
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
         
         # Display uploaded papers
         for i, paper in enumerate(st.session_state.papers):
             with st.expander(f"📑 {paper['name']}", expanded=False):
                 st.markdown(f"**Status:** {'✅ Processed' if paper['processed'] else '⏳ Processing...'}")
                 st.markdown(f"**Content Preview:**")
-                st.text(paper['content'][:500] + "..." if len(paper['content']) > 500 else paper['content'])
+                preview_text = paper['content'][:500] + "..." if len(paper['content']) > 500 else paper['content']
+                st.text_area("Content", preview_text, height=200, key=f"content_{i}")
     
     with col2:
         st.markdown("### 📊 Analysis & Summaries")
         
         if st.session_state.summaries:
             # Display individual summaries
-            for summary in st.session_state.summaries:
-                st.markdown(f'<div class="summary-box">', unsafe_allow_html=True)
-                st.markdown(f"**📄 {summary['title']}**")
-                st.markdown(f"*Summary Type: {summary['type'].title()}*")
-                st.markdown(summary['summary'])
-                st.markdown('</div>', unsafe_allow_html=True)
+            for i, summary in enumerate(st.session_state.summaries):
+                with st.expander(f"📄 {summary['title']}", expanded=True):
+                    st.markdown(f"**Summary Type:** {summary['type'].title()}")
+                    st.markdown(f'<div class="summary-box">{summary["summary"]}</div>', 
+                               unsafe_allow_html=True)
         
         # Comparison section
         if len(st.session_state.summaries) >= 2:
+            st.markdown("---")
             st.markdown("### 🔄 Comparative Analysis")
             
             if st.button("🔍 Generate Comparative Analysis", type="primary"):
@@ -379,19 +345,8 @@ def main():
                     st.markdown("**🔄 Comparative Analysis Results:**")
                     st.markdown(comparison)
                     st.markdown('</div>', unsafe_allow_html=True)
-            
-            # Similarity analysis
-            st.markdown("### 📈 Similarity Analysis")
-            
-            if st.button("📊 Generate Similarity Matrix"):
-                with st.spinner("Calculating paper similarities..."):
-                    contents = [paper['content'] for paper in st.session_state.papers]
-                    titles = [paper['name'] for paper in st.session_state.papers]
-                    
-                    similarity_data = similarity_analyzer.calculate_similarity_matrix(contents, titles)
-                    fig = similarity_analyzer.create_similarity_visualization(similarity_data)
-                    
-                    st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Upload at least 2 papers to enable comparative analysis")
     
     # Export section
     if st.session_state.summaries:
@@ -444,7 +399,7 @@ def main():
                 export_data = {
                     'papers': [{'name': p['name'], 'content_preview': p['content'][:1000]} for p in st.session_state.papers],
                     'summaries': st.session_state.summaries,
-                    'analysis_timestamp': str(st.session_state.get('timestamp', 'N/A'))
+                    'timestamp': str(st.session_state.get('timestamp', 'N/A'))
                 }
                 
                 json_str = json.dumps(export_data, indent=2)
@@ -456,12 +411,17 @@ def main():
                     mime="application/json"
                 )
     
+    # Status section
+    if not st.session_state.papers:
+        st.info("👆 Upload some research papers to get started!")
+    
     # Footer
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
         <p>🔬 AI-Powered Research Paper Summarizer & Comparator</p>
-        <p>Built with Streamlit | Powered by Hugging Face | Authors: Urja Sahni & Sahil Kumar Sahoo</p>
+        <p>Built with Streamlit | Powered by Hugging Face</p>
+        <p>Authors: Urja Sahni & Sahil Kumar Sahoo</p>
     </div>
     """, unsafe_allow_html=True)
 
