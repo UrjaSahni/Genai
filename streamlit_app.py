@@ -89,21 +89,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------- OPENROUTER CLIENT SETUP ----------------
-@st.cache_resource
 def setup_openrouter_client():
     """Initialize OpenRouter client with error handling"""
     api_key = os.getenv("OPENROUTER_API_KEY")
     
     # Check if API key exists
     if not api_key:
-        st.error("❌ OPENROUTER_API_KEY not found in environment variables!")
-        st.info("Please set your OpenRouter API key in the .env file")
-        return None
+        return None, "OPENROUTER_API_KEY not found in environment variables!"
     
     # Validate API key format
     if not api_key.startswith('sk-or-'):
-        st.error("❌ Invalid API key format. OpenRouter API keys should start with 'sk-or-'")
-        return None
+        return None, "Invalid API key format. OpenRouter API keys should start with 'sk-or-'"
     
     try:
         client = OpenAI(
@@ -111,37 +107,20 @@ def setup_openrouter_client():
             api_key=api_key,
         )
         
-        # Test the connection with a simple request
-        test_response = client.chat.completions.create(
-            extra_headers={
-                "HTTP-Referer": "https://github.com/your-repo", # Optional
-                "X-Title": "Research Paper Summarizer", # Optional
-            },
-            model="deepseek/deepseek-chat-v3.1:free",
-            messages=[{"role": "user", "content": "Hello"}],
-            max_tokens=10
-        )
-        
-        st.success("✅ OpenRouter client initialized successfully!")
-        return client
+        # Don't test connection here to avoid caching issues
+        return client, "OpenRouter client initialized successfully!"
         
     except Exception as e:
-        error_msg = str(e)
-        if "401" in error_msg or "Unauthorized" in error_msg:
-            st.error("❌ Authentication failed: Invalid OpenRouter API key")
-            st.info("""
-            **How to fix this:**
-            1. Go to https://openrouter.ai/keys
-            2. Create a new API key
-            3. Update your .env file with: OPENROUTER_API_KEY=your_api_key_here
-            4. Restart the application
-            """)
-        else:
-            st.error(f"❌ Failed to initialize OpenRouter client: {error_msg}")
-        return None
+        return None, f"Failed to initialize OpenRouter client: {str(e)}"
 
 # Initialize client
-openrouter_client = setup_openrouter_client()
+openrouter_client, client_status = setup_openrouter_client()
+
+# Display client status
+if openrouter_client is None:
+    st.error(f"❌ {client_status}")
+else:
+    st.success(f"✅ {client_status}")
 
 # ---------------- DOCUMENT PROCESSING ----------------
 class SimpleDocumentProcessor:
@@ -189,6 +168,11 @@ class ResearchSummarizer:
         """Generate summary using OpenRouter"""
         if not self.client:
             return "❌ Error: AI client not available. Please check your OpenRouter API key."
+        
+        # Truncate content to avoid token limits
+        max_content_length = 3000  # Reduced to be safe
+        if len(content) > max_content_length:
+            content = content[:max_content_length] + "..."
             
         prompts = {
             "comprehensive": f"""
@@ -200,7 +184,7 @@ class ResearchSummarizer:
             5. Limitations and future work
             
             Research Paper Content:
-            {content[:4000]}
+            {content}
             """,
             "key_insights": f"""
             Extract the most important insights and findings from this research paper.
@@ -208,19 +192,30 @@ class ResearchSummarizer:
             Present the insights in a clear, structured format.
             
             Research Paper Content:
-            {content[:4000]}
+            {content}
             """,
             "methodology": f"""
             Summarize the research methodology, experimental design, and analytical approaches used in this paper.
             Include details about data collection, analysis methods, and experimental setup.
             
             Research Paper Content:
-            {content[:4000]}
+            {content}
             """
         }
         
         try:
-            response = self.client.chat.completions.create(
+            # Make sure we have a valid API key
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key or not api_key.startswith('sk-or-'):
+                return "❌ Error: Invalid or missing OpenRouter API key"
+            
+            # Create a fresh client instance to avoid any caching issues
+            client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key,
+            )
+            
+            response = client.chat.completions.create(
                 extra_headers={
                     "HTTP-Referer": "https://github.com/research-summarizer",
                     "X-Title": "AI Research Paper Summarizer",
@@ -230,23 +225,25 @@ class ResearchSummarizer:
                     "role": "user",
                     "content": prompts.get(summary_type, prompts["comprehensive"])
                 }],
-                max_tokens=2000,
+                max_tokens=1500,  # Reduced to avoid limits
                 temperature=0.3
             )
             return response.choices[0].message.content
             
         except Exception as e:
-            error_msg = str(e)
-            if "401" in error_msg:
-                return "❌ Authentication Error: Please check your OpenRouter API key."
-            elif "429" in error_msg:
-                return "❌ Rate Limit Error: Too many requests. Please wait and try again."
-            elif "503" in error_msg:
-                return "❌ Service Unavailable: The model is currently unavailable. Please try again later."
-            elif "400" in error_msg:
-                return "❌ Bad Request: The request was invalid. Please try with a different document."
+            error_msg = str(e).lower()
+            if "401" in error_msg or "unauthorized" in error_msg:
+                return "❌ Authentication Error: Invalid OpenRouter API key. Please check your key at https://openrouter.ai/keys"
+            elif "429" in error_msg or "rate limit" in error_msg:
+                return "❌ Rate Limit Error: Too many requests. Please wait a moment and try again."
+            elif "400" in error_msg or "bad request" in error_msg:
+                return "❌ Request Error: The content may be too long or contain invalid characters."
+            elif "503" in error_msg or "service unavailable" in error_msg:
+                return "❌ Service Error: The AI model is temporarily unavailable. Please try again later."
+            elif "timeout" in error_msg:
+                return "❌ Timeout Error: Request took too long. Please try with a shorter document."
             else:
-                return f"❌ Error generating summary: {error_msg}"
+                return f"❌ API Error: {str(e)[:200]}..."
     
     def compare_papers(self, summaries: List[str], titles: List[str]) -> str:
         """Compare multiple research papers"""
@@ -333,9 +330,30 @@ def main():
         
         # Show API key status
         api_key = os.getenv("OPENROUTER_API_KEY")
-        if api_key and api_key.startswith('sk-or-'):
+        if api_key and api_key.startswith('sk-or-') and len(api_key) > 20:
             st.markdown('<div class="token-status token-success">✅ OpenRouter API Key: Configured</div>', 
                        unsafe_allow_html=True)
+            
+            # Test API connection
+            if st.button("🔍 Test API Connection"):
+                with st.spinner("Testing connection..."):
+                    test_client = OpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=api_key,
+                    )
+                    try:
+                        test_response = test_client.chat.completions.create(
+                            extra_headers={
+                                "HTTP-Referer": "https://github.com/research-summarizer",
+                                "X-Title": "Connection Test",
+                            },
+                            model="deepseek/deepseek-chat-v3.1:free",
+                            messages=[{"role": "user", "content": "Hello, just testing the connection."}],
+                            max_tokens=10
+                        )
+                        st.success("✅ API connection successful!")
+                    except Exception as e:
+                        st.error(f"❌ API connection failed: {str(e)}")
         else:
             st.markdown('<div class="token-status token-error">❌ OpenRouter API Key: Not configured</div>', 
                        unsafe_allow_html=True)
@@ -343,8 +361,13 @@ def main():
             **Setup Required:**
             1. Go to [OpenRouter Keys](https://openrouter.ai/keys)
             2. Create a new API key
-            3. Add to .env file: `OPENROUTER_API_KEY=your_key_here`
+            3. Update your .env file: `OPENROUTER_API_KEY=your_key_here`
             4. Restart the application
+            
+            **Your current key status:**
+            - Exists: ✅ if api_key else ❌
+            - Correct format: ✅ if api_key and api_key.startswith('sk-or-') else ❌
+            - Sufficient length: ✅ if api_key and len(api_key) > 20 else ❌
             """)
         
         uploaded_files = st.file_uploader(
@@ -413,21 +436,33 @@ def main():
                             }
                             st.session_state.papers.append(paper_info)
                             
-                            # Generate summary if client is available
-                            if openrouter_client:
-                                with st.spinner("Generating AI summary..."):
-                                    summary = summarizer.generate_summary(content, summary_type)
+                            # Generate summary - always try even if client setup failed
+                            with st.spinner("Generating AI summary..."):
+                                try:
+                                    # Create fresh client for each request to avoid session issues
+                                    fresh_api_key = os.getenv("OPENROUTER_API_KEY")
+                                    if fresh_api_key and fresh_api_key.startswith('sk-or-'):
+                                        fresh_client = OpenAI(
+                                            base_url="https://openrouter.ai/api/v1",
+                                            api_key=fresh_api_key,
+                                        )
+                                        fresh_summarizer = ResearchSummarizer(fresh_client)
+                                        summary = fresh_summarizer.generate_summary(content, summary_type)
+                                    else:
+                                        summary = "❌ Summary not generated: API key not properly configured"
+                                        
                                     st.session_state.summaries.append({
                                         'title': uploaded_file.name,
                                         'summary': summary,
                                         'type': summary_type
                                     })
-                            else:
-                                st.session_state.summaries.append({
-                                    'title': uploaded_file.name,
-                                    'summary': "❌ Summary not generated: API client not available",
-                                    'type': summary_type
-                                })
+                                except Exception as e:
+                                    error_summary = f"❌ Error generating summary: {str(e)}"
+                                    st.session_state.summaries.append({
+                                        'title': uploaded_file.name,
+                                        'summary': error_summary,
+                                        'type': summary_type
+                                    })
                             
                             st.success(f"✅ Successfully processed {uploaded_file.name}")
                         else:
