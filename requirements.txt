@@ -1,17 +1,18 @@
-faiss-cpu
-fpdf2
-langchain
-langchain-community
-langchain-together
-langchain_community
-langchain_together
-Pillow
-pypdf
-python-docx
-python-dotenv
-python-pptx
-sentence-transformers
-streamlit
-torch
-transformers
-unstructured
+faiss-cpu  # High-speed vector database for storing and searching text embeddings (CPU version)
+fpdf2  # Library to create and export PDF files programmatically (used for chat history export)
+langchain  # Framework for building LLM-powered apps that connect models with external data
+langchain-community  # Community-maintained LangChain extensions (loaders, embeddings, vector stores)
+langchain-together  # LangChain integration for Together API to use models like DeepSeek-V3
+langchain_community  # Alternate import path for the same community LangChain modules
+langchain_together  # Alternate import path for Together integration module
+Pillow  # Image processing library for handling and displaying images (used internally by Streamlit)
+pypdf  # Reads and manipulates PDF files (used by PyPDFLoader in LangChain)
+python-docx  # Reads and writes Microsoft Word (.docx) files
+python-dotenv  # Loads environment variables securely from a .env file
+python-pptx  # Reads and extracts text from PowerPoint (.pptx) files
+sentence-transformers  # Provides pretrained models to generate text embeddings (semantic meaning)
+streamlit  # Framework to build interactive web apps directly in Python
+torch  # Core deep learning library used by sentence-transformers and Hugging Face models
+transformers  # Hugging Face library for working with pretrained LLMs and embeddings
+unstructured  # Extracts text and metadata from unstructured files like PDFs, Word, and HTML
+ 
